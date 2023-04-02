@@ -77,8 +77,8 @@ typedef struct _xref_t
 typedef struct _pdf_t
 {
     char  *name;
-    short  pdf_major_version;
-    short  pdf_minor_version;
+    int   pdf_major_version;
+    int   pdf_minor_version;
 
     int     n_xrefs;
     xref_t *xrefs;

@@ -16,7 +16,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
+#ifndef _WIN32
+#   include <dirent.h>
+#else
+#   include <direct.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
 #include "main.h"
@@ -25,13 +29,18 @@
 
 static void usage(void)
 {
-    printf("-- " EXEC_NAME " v" VER" --\n"
-           "Usage: ./" EXEC_NAME " <file.pdf> [-i] [-w] [-q]\n"
-           "\t -i Display PDF creator information\n"
+    printf("-- " EXEC_NAME " v" VER " " COMPILER " " PLATFORM " " CONFIG " " EXPERIMENTAL " --\n"
+           "Usage: " EXEC_NAME " <file.pdf> [-i] [-w] [-q]"
+#ifdef PDFRESURRECT_EXPERIMENTAL
+           " [-s]"
+#endif
+           "\n"
+           "\t -i Display PDF creator information (DocInfo dictionary)\n"
            "\t -w Write the PDF versions and summary to disk\n"
+#ifdef PDFRESURRECT_EXPERIMENTAL
+           "\t -s Scrub the previous history data from the specified PDF\n"
+#endif
            "\t -q Display only the number of versions contained in the PDF\n");
-// Experimental feature:
-//           "\t -s Scrub the previous history data from the specified PDF\n");
     exit(0);
 }
 
@@ -55,7 +64,7 @@ static void write_version(
     snprintf(new_fname, strlen(fname) + strlen(dirname) + 32,
              "%s/%s-version-%d.pdf", dirname, fname, xref->version);
 
-    if (!(new_fp = fopen(new_fname, "w")))
+    if (!(new_fp = fopen(new_fname, "wb")))
     {
         ERR("Could not create file '%s'\n", new_fname);
         fseek(fp, start, SEEK_SET);
@@ -101,7 +110,7 @@ static void scrub_document(FILE *fp, const pdf_t *pdf)
       *c = '\0';
     strcat(new_name, suffix);
 
-    if ((new_fp = fopen(new_name, "r")))
+    if ((new_fp = fopen(new_name, "rb")))
     {
         ERR("File name already exists for saving scrubbed document\n");
         free(new_name);
@@ -163,7 +172,7 @@ static void scrub_document(FILE *fp, const pdf_t *pdf)
 #endif // PDFRESURRECT_EXPERIMENTAL
 
 
-static void display_creator(FILE *fp, const pdf_t *pdf)
+static void display_creator(const pdf_t *pdf)
 {
     int i;
 
@@ -217,7 +226,9 @@ int main(int argc, char **argv)
 {
     int         i, n_valid, do_write, do_scrub;
     char       *c, *dname, *name;
+#ifndef _WIN32
     DIR        *dir;
+#endif
     FILE       *fp;
     pdf_t      *pdf;
     pdf_flag_t  flags;
@@ -249,7 +260,7 @@ int main(int argc, char **argv)
     if (!name)
       usage();
 
-    if (!(fp = fopen(name, "r")))
+    if (!(fp = fopen(name, "rb")))
     {
         ERR("Could not open file '%s'\n", argv[1]);
         return -1;
@@ -299,14 +310,20 @@ int main(int argc, char **argv)
 
         dname = safe_calloc(strlen(name) + 16);
         sprintf(dname, "%s-versions", name);
+#ifndef _WIN32
         if (!(dir = opendir(dname)))
           mkdir(dname, S_IRWXU);
         else
+#else
+        if (!_mkdir(dname))
+#endif
         {
             ERR("This directory already exists, PDF version extraction will "
                 "not occur.\n");
             fclose(fp);
+#ifndef _WIN32
             closedir(dir);
+#endif
             free(dname);
             pdf_delete(pdf);
             return -1;
@@ -329,7 +346,7 @@ int main(int argc, char **argv)
 
     /* Display extra information */
     if (flags & PDF_FLAG_DISP_CREATOR)
-      display_creator(fp, pdf);
+      display_creator(pdf);
 
     fclose(fp);
     free(dname);

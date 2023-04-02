@@ -101,7 +101,7 @@ static char *get_object_from_here(FILE *fp, size_t *size, int *is_stream);
 
 static char *get_object(
     FILE         *fp,
-    int           obj_id,
+    long          obj_id,
     const xref_t *xref,
     size_t       *size,
     int          *is_stream);
@@ -201,7 +201,8 @@ int pdf_load_xrefs(FILE *fp, pdf_t *pdf)
 {
     int  i, ver, is_linear;
     long pos, pos_count;
-    char x, *c, buf[256];
+    int  x;
+    char *c, buf[256];
 
     c = NULL;
 
@@ -352,7 +353,7 @@ void pdf_zero_object(
     int          xref_idx,
     int          entry_idx)
 {
-    int           i;
+    size_t        i;
     char         *obj;
     size_t        obj_sz;
     xref_entry_t *entry;
@@ -598,7 +599,7 @@ static void load_xref_from_plaintext(FILE *fp, xref_t *xref)
 
     /* Load entry data */
     obj_id = 0;
-    fseek(fp, xref->start + strlen("xref"), SEEK_SET);
+    fseek(fp, xref->start + (long)strlen("xref"), SEEK_SET);
     added_entries = 0;
     for (i=0; i<xref->n_entries; i++)
     {
@@ -713,7 +714,7 @@ static void get_xref_linear_skipped(FILE *fp, xref_t *xref)
 
     /* If we found 'trailer' look backwards for 'xref' */
     ch = 0;
-    while (SAFE_F(fp, ((ch = fgetc(fp)) != 'x')))
+    while (SAFE_F(fp, ((ch = (char)fgetc(fp)) != 'x')))
       if (fseek(fp, -2, SEEK_CUR) == -1)
         FAIL("Failed to locate an xref.  This might be a corrupt PDF.\n");
 
@@ -814,7 +815,7 @@ static void load_creator(FILE *fp, pdf_t *pdf)
 
         /* Look for "<< ....... /Info ......" */
         c = '\0';
-        while (SAFE_F(fp, ((c = fgetc(fp)) != '>')))
+        while (SAFE_F(fp, ((c = (char)fgetc(fp)) != '>')))
           if (SAFE_F(fp, ((c == '/') &&
                           (fgetc(fp) == 'I') && ((fgetc(fp) == 'n')))))
             break;
@@ -822,13 +823,13 @@ static void load_creator(FILE *fp, pdf_t *pdf)
         /* Could not find /Info in trailer */
         END_OF_TRAILER(c, start, fp);
 
-        while (SAFE_F(fp, (!isspace(c = fgetc(fp)) && (c != '>'))))
+        while (SAFE_F(fp, (!isspace(c = (char)fgetc(fp)) && (c != '>'))))
             ; /* Iterate to first white space /Info<space><data> */
 
         /* No space between /Info and its data */
         END_OF_TRAILER(c, start, fp);
 
-        while (SAFE_F(fp, (isspace(c = fgetc(fp)) && (c != '>'))))
+        while (SAFE_F(fp, (isspace(c = (char)fgetc(fp)) && (c != '>'))))
             ; /* Iterate right on top of first non-whitespace /Info data */
 
         /* No data for /Info */
@@ -838,15 +839,15 @@ static void load_creator(FILE *fp, pdf_t *pdf)
         buf_idx = 0;
         obj_id_buf[buf_idx++] = c;
         while ((buf_idx < (sizeof(obj_id_buf) - 1)) &&
-               SAFE_F(fp, (!isspace(c = fgetc(fp)) && (c != '>'))))
+               SAFE_F(fp, (!isspace(c = (char)fgetc(fp)) && (c != '>'))))
           obj_id_buf[buf_idx++] = c;
 
         END_OF_TRAILER(c, start, fp);
 
         /* Get the object for the creator data.  If linear, try both xrefs */
-        buf = get_object(fp, atoll(obj_id_buf), &pdf->xrefs[i], &sz, NULL);
+        buf = get_object(fp, (long)atoll(obj_id_buf), &pdf->xrefs[i], &sz, NULL);
         if (!buf && pdf->xrefs[i].is_linear && (i+1 < pdf->n_xrefs))
-          buf = get_object(fp, atoll(obj_id_buf), &pdf->xrefs[i+1], &sz, NULL);
+          buf = get_object(fp, (long)atoll(obj_id_buf), &pdf->xrefs[i+1], &sz, NULL);
 
         load_creator_from_buf(fp, &pdf->xrefs[i], buf, sz);
         free(buf);
@@ -1058,14 +1059,14 @@ static char *get_object_from_here(FILE *fp, size_t *size, int *is_stream)
 
 static char *get_object(
     FILE         *fp,
-    int           obj_id,
+    long         obj_id,
     const xref_t *xref,
     size_t       *size,
     int          *is_stream)
 {
     static const int    blk_sz = 256;
-    int                 i, total_sz, read_sz, n_blks, search, stream;
-    size_t              obj_sz;
+    int                 i, n_blks, stream;
+    size_t              search, obj_sz, total_sz, read_sz;
     char               *c, *data;
     long                start;
     const xref_entry_t *entry;
@@ -1222,7 +1223,13 @@ static char *get_header(FILE *fp)
     char *header = safe_calloc(1024);
     long start = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    SAFE_E(fread(header, 1, 1023, fp), 1023, "Failed to load PDF header.\n");
+    do {
+        if ((fread(header, 1, 1023, fp)) != (1023)) {
+            do {
+                {fprintf((__acrt_iob_func(2)), "[pdfresurrect]"" -- Error -- " "Failed to load PDF header.\n"); }; exit(1);
+            } while (0);
+        }
+    } while (0);
     fseek(fp, start, SEEK_SET);
     return header;
 }

@@ -21,9 +21,46 @@
 
 #define EXEC_NAME "pdfresurrect"
 #define VER_MAJOR "0"
-#define VER_MINOR "24b"
+#define VER_MINOR "25"
 #define VER       VER_MAJOR"."VER_MINOR
 
+/* Compiler */
+#if defined(_MSC_VER)
+#   define COMPILER "MSC"
+#elif defined(__llvm__)
+#   define COMPILER "llvm"
+#elif defined(__GNUC__)
+#   define COMPILER "GNU-C"
+#else
+#   define COMPILER "<other compiler>"
+#endif
+
+/* Platform */
+#if defined(_WIN64)
+#   define PLATFORM "x64"
+#elif defined(_WIN32)
+#   define PLATFORM "x86"
+#elif defined(__linux__)
+#   define PLATFORM "linux"
+#elif defined(__APPLE__)
+#   define PLATFORM "mac"
+#else
+#   define PLATFORM "<unknown platform>"
+#endif
+
+/* Debug vs release */
+#if defined(DEBUG) || defined(_DEBUG)
+#   define CONFIG "debug"
+#else
+#   define CONFIG "release"
+#endif
+
+/* Experimental or not */
+#ifdef PDFRESURRECT_EXPERIMENTAL
+#    define EXPERIMENTAL "experimental"
+#else
+#    define EXPERIMENTAL 
+#endif
 
 #define TAG "[pdfresurrect]"
 #define ERR(...) {fprintf(stderr, TAG" -- Error -- " __VA_ARGS__);}
