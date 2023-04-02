@@ -8,7 +8,7 @@ as new PDF files leaving the original PDF unmodified.
 
 ```
 Usage: pdfresurrect <file.pdf> [-i] [-w] [-q]
--i   Display PDF creator information
+-i   Display PDF creator information (DocInfo dictionary)
 -w   Write the PDF versions and summary to disk
 -q   Display only the number of versions contained in the PDF
 ```
@@ -81,6 +81,14 @@ make uninstall
 
 # Windows
 
+Either compile from within the Microsoft VisualStudio 2022 IDE or use a Developer command prompt:
+
+```batch
+devenv pdfresurrect.sln /build "Debug|x64"
+devenv pdfresurrect.sln /build "Debug|x86"
+```
+
+Build configurations are ""Debug|x64", ""Release|x64", "Debug|x86" and "Release|x86".
 
 # Thanks
 
