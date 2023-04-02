@@ -19,6 +19,15 @@ And if built with `#define PDFRESURRECT_EXPERIMENTAL`:
 -s Scrub the previous history data from the specified PDF
 ```
 
+# Key changes in fork [https://github.com/petervwyatt/pdfresurrect](petervwyatt/pdfresurrect)
+* Support for Windows builds (x64 and x86) using Microsoft VisualStudio 2022 (common C code)
+* Bug fixes to ensure PDFs are always treated as binary files
+* Bug fixes to avoid crashes (i.e. fix codified assumptions about validity of some PDF structures)
+* Code cleanup for more modern C compilers that whinge more
+* Switch to MarkDown for this README
+* Some code polishing
+
+
 # Notes
 If built with `#define PDFRESURRECT_EXPERIMENTAL`,
 the scrubbing feature (`-s`) should not be trusted for any serious security
@@ -88,7 +97,7 @@ devenv pdfresurrect.sln /build "Debug|x64"
 devenv pdfresurrect.sln /build "Debug|x86"
 ```
 
-Build configurations are ""Debug|x64", ""Release|x64", "Debug|x86" and "Release|x86".
+Build configurations are `Debug|x64`, `Release|x64`, `Debug|x86` and `Release|x86`.
 
 # Thanks
 
