@@ -33,4 +33,6 @@ chibataiki: Reported and isolated an infinite loop in the trailer search.
 
 jwilk: Spelling corrections in comments.
 
+petervwyatt: Port to Windows and robustness improvements.
+
 a1346054: Spacing/comment/license cleanup.
