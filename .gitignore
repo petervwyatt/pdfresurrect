@@ -3,3 +3,7 @@ config.status
 Makefile
 pdfresurrect
 *.o
+.vs/
+x64/
+x86/
+*.user
