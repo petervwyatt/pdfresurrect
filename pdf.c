@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <assert.h>
 #include "pdf.h"
 #include "main.h"
 
@@ -47,11 +48,11 @@
  * Emit the diagnostic '_msg' and exit.
  * _msg: Message to emit prior to exiting.
  */
-#define FAIL(_msg)      \
-  do {                  \
-    ERR(_msg);          \
-    exit(EXIT_FAILURE); \
-  } while (0)
+#define FAIL(_msg)          \
+    do {                    \
+        ERR(_msg);          \
+        exit(EXIT_FAILURE); \
+    } while (0)
 
 
 /* SAFE_E
@@ -64,12 +65,12 @@
  * _cmp:  Expected value, error if this returns false.
  * _msg:  What to say when an error occurs.
  */
-#define SAFE_E(_expr, _cmp, _msg) \
- do {                             \
-    if ((_expr) != (_cmp)) {      \
-      FAIL(_msg);                  \
-    }                             \
-  } while (0)
+#define SAFE_E(_expr, _cmp, _msg)     \
+     do {                             \
+        if ((_expr) != (_cmp)) {      \
+          FAIL(_msg);                 \
+        }                             \
+      } while (0)
 
 
 /*
@@ -111,7 +112,7 @@ static const char *get_type(FILE *fp, int obj_id, const xref_t *xref);
 static char *get_header(FILE *fp);
 
 static char *decode_text_string(const char *str, size_t str_len);
-static int get_next_eof(FILE *fp);
+static long get_next_eof(FILE *fp);
 
 
 /*
@@ -124,14 +125,19 @@ pdf_t *pdf_new(const char *name)
     pdf_t      *pdf;
 
     pdf = safe_calloc(sizeof(pdf_t));
+    assert(pdf != NULL);
 
-    if (name)
+    if (name != NULL)
     {
         /* Just get the file name (not path) */
-        if ((n = strrchr(name, '/')))
-          ++n;
+#ifndef _WIN32
+        if ((n = strrchr(name, '/')) != NULL)
+#else
+        if ((n = strrchr(name, '\\')) != NULL)
+#endif
+            ++n;
         else
-          n = name;
+            n = name;
 
         pdf->name = safe_calloc(strlen(n) + 1);
         strcpy(pdf->name, n);
@@ -142,6 +148,7 @@ pdf_t *pdf_new(const char *name)
         strcpy(pdf->name, "Unknown");
     }
 
+    printf("Processing '%s'\n", pdf->name);
     return pdf;
 }
 
@@ -150,7 +157,7 @@ void pdf_delete(pdf_t *pdf)
 {
     int i;
 
-    for (i=0; i<pdf->n_xrefs; i++)
+    for (i = 0; i < pdf->n_xrefs; i++)
     {
         free(pdf->xrefs[i].creator);
         free(pdf->xrefs[i].entries);
@@ -165,12 +172,12 @@ void pdf_delete(pdf_t *pdf)
 int pdf_is_pdf(FILE *fp)
 {
     char *header;
-    if (!(header = get_header(fp)))
+    if ((header = get_header(fp)) == NULL)
       return 0;
 
-    /* First 1024 bytes of doc must be header (1.7 spec pg 1102) */
+    /* First 1024 bytes of doc must be header (Adobe 1.7 spec pg 1102) */
     const char *c = strstr(header, "%PDF-");
-    const int is_pdf = c && ((c - header+strlen("%PDF-M.m")) < 1024);
+    const int is_pdf = c && ((c - header + strlen("%PDF-M.m")) < 1024);
     free(header);
     return is_pdf;
 }
@@ -184,15 +191,15 @@ void pdf_get_version(FILE *fp, pdf_t *pdf)
      * The format is %PDF-M.m, where 'M' is the major number and 'm' minor.
      */
     const char *c;
-    if ((c = strstr(header, "%PDF-")) &&
-        ((c + 6)[0] == '.') && // Separator
-        isdigit((c + 5)[0]) && // Major number
-        isdigit((c + 7)[0]))   // Minor number
+    if (((c = strstr(header, "%PDF-")) != NULL) &&
+        ((c + 6)[0] == '.') &&        // Period separator
+        (isdigit((c + 5)[0]) != 0) && // Major version number
+        (isdigit((c + 7)[0]) != 0))   // Minor version number
     {
         pdf->pdf_major_version = atoi(c + strlen("%PDF-"));
         pdf->pdf_minor_version = atoi(c + strlen("%PDF-M."));
     }
-
+    printf("PDF header version is %1d.%1d\n", pdf->pdf_major_version, pdf->pdf_minor_version);
     free(header);
 }
 
@@ -206,51 +213,56 @@ int pdf_load_xrefs(FILE *fp, pdf_t *pdf)
 
     c = NULL;
 
-    /* Count number of xrefs */
+    /* Count number of incremental updates based on "%%EOF" */
     pdf->n_xrefs = 0;
     fseek(fp, 0, SEEK_SET);
     while (get_next_eof(fp) >= 0)
-      ++pdf->n_xrefs;
+        ++pdf->n_xrefs;
 
-    if (!pdf->n_xrefs)
-      return 0;
+    if (pdf->n_xrefs == 0)
+        FAIL("No '%%EOF' markers found!\n");
 
-    /* Load in the start/end positions */
-    fseek(fp, 0, SEEK_SET);
+    /* Work out how big PDF file is */
+    fseek(fp, 0L, SEEK_END);
+    pdf->file_size = ftell(fp);
+
+    rewind(fp);
+
+    /* Allocate a buffer for N x incremental updates (based on "%%EOF"). 
+       Then read PDF and save start and end offsets for each incremental update. */
     pdf->xrefs = safe_calloc(sizeof(xref_t) * pdf->n_xrefs);
     ver = 1;
-    for (i=0; i<pdf->n_xrefs; i++)
+    for (i = 0; i < pdf->n_xrefs; i++)
     {
-        /* Seek to %%EOF */
+        /* Seek to next "%%EOF" */
         if ((pos = get_next_eof(fp)) < 0)
           break;
 
         /* Set and increment the version */
         pdf->xrefs[i].version = ver++;
 
-        /* Rewind until we find end of "startxref" */
+        /* Rewind until we find end of "startxref" keyword */
         pos_count = 0;
         while (SAFE_F(fp, ((x = fgetc(fp)) != 'f')))
           fseek(fp, pos - (++pos_count), SEEK_SET);
 
         /* Suck in end of "startxref" to start of %%EOF */
-        if (pos_count >= sizeof(buf)) {
-          FAIL("Failed to locate the startxref token. "
-              "This might be a corrupt PDF.\n");
-        }
+        if (pos_count >= sizeof(buf))
+            FAIL("Failed to locate the startxref token. This might be a corrupt PDF.\n");
+        
         memset(buf, 0, sizeof(buf));
-        SAFE_E(fread(buf, 1, pos_count, fp), pos_count,
-               "Failed to read startxref.\n");
+        SAFE_E(fread(buf, 1, pos_count, fp), pos_count, "Failed to read startxref token.\n");
         c = buf;
-        while (*c == ' ' || *c == '\n' || *c == '\r')
-          ++c;
+        /* Skip the 6 possible PDF whitespace chars: NUL, HT, LF, CR, FF, SPACE */
+        while (*c == ' ' || *c == '\n' || *c == '\r' || *c == 0x00 || *c == '\t' || *c == 0x0C)
+            ++c;
 
-        /* xref start position */
+        /* read startxref position */
         pdf->xrefs[i].start = atol(c);
 
-        /* If xref is 0 handle linear xref table */
+        /* If xref is 0 handle possible linear xref table */
         if (pdf->xrefs[i].start == 0)
-          get_xref_linear_skipped(fp, &pdf->xrefs[i]);
+            get_xref_linear_skipped(fp, &pdf->xrefs[i]);
 
         /* Non-linear, normal operation, so just find the end of the xref */
         else
@@ -283,7 +295,7 @@ int pdf_load_xrefs(FILE *fp, pdf_t *pdf)
      * to make adjustments so that things spit out properly
      */
     if (pdf->xrefs[0].is_linear)
-      resolve_linearized_pdf(pdf);
+        resolve_linearized_pdf(pdf);
 
     /* Ok now we have all xref data.  Go through those versions of the
      * PDF and try to obtain creator information
@@ -393,16 +405,17 @@ void pdf_summarize(
     dst = NULL;
     dst_name = NULL;
 
-    if (name)
+    if (name != NULL)
     {
         dst_name = safe_calloc(strlen(name) * 2 + 16);
         sprintf(dst_name, "%s/%s", name, name);
 
-        if ((c = strrchr(dst_name, '.')) && (strncmp(c, ".pdf", 4) == 0))
+        /* stub out the file extension */
+        if (((c = strrchr(dst_name, '.')) != NULL) && (strncmp(c, ".pdf", 4) == 0))
           *c = '\0';
 
         strcat(dst_name, ".summary");
-        if (!(dst = fopen(dst_name, "w")))
+        if ((dst = fopen(dst_name, "w")) == NULL)
         {
             ERR("Could not open file '%s' for writing\n", dst_name);
             return;
@@ -418,7 +431,7 @@ void pdf_summarize(
       --n_versions;
 
     /* Ignore bad xref entry */
-    for (i=1; i<pdf->n_xrefs; ++i)
+    for (i = 1; i < pdf->n_xrefs; ++i)
       if (pdf->xrefs[i].end == 0)
         --n_versions;
 
@@ -577,8 +590,8 @@ static void load_xref_entries(FILE *fp, xref_t *xref)
 
 static void load_xref_from_plaintext(FILE *fp, xref_t *xref)
 {
-    int  i, obj_id, added_entries;
-    char c, buf[32] = {0};
+    int  i, obj_id, added_entries, c;
+    char buf[32] = {0};
     long start, pos;
     size_t buf_idx;
 
@@ -613,15 +626,13 @@ static void load_xref_from_plaintext(FILE *fp, xref_t *xref)
 
         /* Collect data up until the following newline. */
         buf_idx = 0;
-        while (c != '\n' && c != '\r' && !feof(fp) &&
-               !ferror(fp) && buf_idx < sizeof(buf))
+        while ((c != '\n') && (c != '\r') && !feof(fp) && !ferror(fp) && (buf_idx < sizeof(buf)))
         {
-            buf[buf_idx++] = c;
+            buf[buf_idx++] = (char)c;
             c = fgetc(fp);
         }
         if (buf_idx >= sizeof(buf)) {
-            FAIL("Failed to locate newline character. "
-                 "This might be a corrupt PDF.\n");
+            FAIL("Failed to locate newline character. This might be a corrupt PDF.\n");
         }
         buf[buf_idx] = '\0';
 
@@ -635,15 +646,13 @@ static void load_xref_from_plaintext(FILE *fp, xref_t *xref)
             const char *token = NULL;
             xref->entries[i].obj_id = obj_id++;
             token = strtok(buf, " ");
-            if (!token) {
-              FAIL("Failed to parse xref entry. "
-                   "This might be a corrupt PDF.\n");
+            if (token == NULL) {
+                FAIL("Failed to parse xref entry. This might be a corrupt PDF.\n");
             }
             xref->entries[i].offset = atol(token);
             token = strtok(NULL, " ");
-            if (!token) {
-              FAIL("Failed to parse xref entry. "
-                   "This might be a corrupt PDF.\n");
+            if (token == NULL) {
+                FAIL("Failed to parse xref entry. This might be a corrupt PDF.\n");
             }
             xref->entries[i].gen_num = atoi(token);
             xref->entries[i].f_or_n = buf[17];
@@ -699,7 +708,7 @@ static void get_xref_linear_skipped(FILE *fp, xref_t *xref)
 
     /* Locate the trailer */
     err = 0;
-    while (!(err = ferror(fp)) && fread(buf, 1, 8, fp))
+    while (((err = ferror(fp)) == 0) && fread(buf, 1, 8, fp))
     {
         if (strncmp(buf, "trailer", strlen("trailer")) == 0)
           break;
@@ -867,29 +876,29 @@ static void load_creator_from_buf(
     char *c;
 
     if (!buf)
-      return;
+        return;
 
     /* Check to see if this is xml or old-school */
-    if ((c = strstr(buf, "/Type")))
-      while (*c && !isspace(*c))
-        ++c;
+    if ((c = strstr(buf, "/Type")) == NULL)
+        while (*c && !isspace(*c))
+            ++c;
 
     /* Probably "Metadata" */
     is_xml = 0;
     if (c && (*c == 'M'))
-      is_xml = 1;
+        is_xml = 1;
 
     /* Is the buffer XML(PDF 1.4+) or old format? */
     if (is_xml)
-      load_creator_from_xml(xref, buf);
+        load_creator_from_xml(xref, buf);
     else
-      load_creator_from_old_format(fp, xref, buf, buf_size);
+        load_creator_from_old_format(fp, xref, buf, buf_size);
 }
 
 
 static void load_creator_from_xml(xref_t *xref, const char *buf)
 {
-    /* TODO */
+    /** @todo */
 }
 
 
@@ -918,7 +927,7 @@ static void load_creator_from_old_format(
 
     for (i=0; i<n_eles; ++i)
     {
-        if (!(c = strstr(buf, info[i].key)))
+        if ((c = strstr(buf, info[i].key)) == NULL)
           continue;
 
         /* Find the value (skipping whitespace) */
@@ -1009,9 +1018,9 @@ static void load_creator_from_old_format(
     /* Go through the values and convert if encoded */
     for (i = 0; i < n_eles; ++i) {
       const size_t val_str_len = strnlen(info[i].value, KV_MAX_VALUE_LENGTH);
-      if ((ascii = decode_text_string(info[i].value, val_str_len))) {
-        strncpy(info[i].value, ascii, val_str_len);
-        free(ascii);
+      if ((ascii = decode_text_string(info[i].value, val_str_len)) != NULL) {
+           strncpy(info[i].value, ascii, val_str_len);
+           free(ascii);
       }
     }
 
@@ -1036,7 +1045,7 @@ static char *get_object_from_here(FILE *fp, size_t *size, int *is_stream)
     /* Object ID */
     memset(buf, 0, 256);
     SAFE_E(fread(buf, 1, 255, fp), 255, "Failed to load object ID.\n");
-    if (!(obj_id = atoi(buf)))
+    if ((obj_id = atoi(buf)) == 0)
     {
         fseek(fp, start, SEEK_SET);
         return NULL;
@@ -1072,24 +1081,24 @@ static char *get_object(
     const xref_entry_t *entry;
 
     if (size)
-      *size = 0;
+        *size = 0;
 
     if (is_stream)
-      *is_stream = 0;
+        *is_stream = 0;
 
     start = ftell(fp);
 
     /* Find object */
     entry = NULL;
     for (i=0; i<xref->n_entries; i++)
-      if (xref->entries[i].obj_id == obj_id)
-      {
-          entry = &xref->entries[i];
-          break;
-      }
+        if (xref->entries[i].obj_id == obj_id)
+        {
+            entry = &xref->entries[i];
+            break;
+        }
 
     if (!entry)
-      return NULL;
+        return NULL;
 
     /* Jump to object start */
     fseek(fp, entry->offset, SEEK_SET);
@@ -1102,24 +1111,24 @@ static char *get_object(
 
     /* Suck in data */
     stream = 0;
-    while ((read_sz = fread(data+total_sz, 1, blk_sz-1, fp)) && !ferror(fp))
+    while (((read_sz = fread(data+total_sz, 1, blk_sz-1, fp)) > 0) && !ferror(fp))
     {
         total_sz += read_sz;
 
         *(data + total_sz) = '\0';
 
         if (total_sz + blk_sz >= (blk_sz * n_blks))
-          data = realloc(data, blk_sz * (++n_blks));
+            data = realloc(data, blk_sz * (++n_blks));
         if (!data) {
-          ERR("Failed to reallocate buffer.\n");
-          exit(EXIT_FAILURE);
+            ERR("Failed to reallocate buffer.\n");
+            exit(EXIT_FAILURE);
         }
 
         search = total_sz - read_sz;
         if (search < 0)
-          search = 0;
+            search = 0;
 
-        if ((c = strstr(data + search, "endobj")))
+        if ((c = strstr(data + search, "endobj")) != NULL)
         {
             *(c + strlen("endobj") + 1) = '\0';
             obj_sz = (char *)strstr(data + search, "endobj") - (char *)data;
@@ -1127,22 +1136,22 @@ static char *get_object(
             break;
         }
         else if (strstr(data, "stream"))
-          stream = 1;
+            stream = 1;
     }
 
     clearerr(fp);
     fseek(fp, start, SEEK_SET);
 
     if (size) {
-      *size = obj_sz;
-      if (!obj_sz && data) {
-        free(data);
-        data = NULL;
-      }
+        *size = obj_sz;
+        if (!obj_sz && data) {
+            free(data);
+            data = NULL;
+        }
     }
 
     if (is_stream)
-      *is_stream = stream;
+        *is_stream = stream;
 
     return data;
 }
@@ -1157,22 +1166,22 @@ static const char *get_type(FILE *fp, int obj_id, const xref_t *xref)
 
     start = ftell(fp);
 
-    if (!(obj = get_object(fp, obj_id, xref, NULL, &is_stream)) ||
+    if (((obj = get_object(fp, obj_id, xref, NULL, &is_stream)) != NULL) ||
         is_stream                                               ||
-        !(endobj = strstr(obj, "endobj")))
+        ((endobj = strstr(obj, "endobj"))) != NULL)
     {
         free(obj);
         fseek(fp, start, SEEK_SET);
 
         if (is_stream)
-          return "Stream";
+            return "Stream";
         else
-          return "Unknown";
+            return "Unknown";
     }
 
     /* Get the Type value (avoiding font names like Type1) */
     c = obj;
-    while ((c = strstr(c, "/Type")) && (c < endobj))
+    while (((c = strstr(c, "/Type")) != NULL) && (c < endobj))
       if (isdigit(*(c + strlen("/Type"))))
       {
           ++c;
@@ -1217,74 +1226,73 @@ static const char *get_type(FILE *fp, int obj_id, const xref_t *xref)
 }
 
 
+/* Returns first 1KB of PDF that must contain the header */
 static char *get_header(FILE *fp)
 {
-    /* First 1024 bytes of doc must be header (1.7 spec pg 1102) */
-    char *header = safe_calloc(1024);
+#define HEADER_RANGE        (1025)
+    char *header = safe_calloc(HEADER_RANGE);
     long start = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    do {
-        if ((fread(header, 1, 1023, fp)) != (1023)) {
-            do {
-                {fprintf((__acrt_iob_func(2)), "[pdfresurrect]"" -- Error -- " "Failed to load PDF header.\n"); }; exit(1);
-            } while (0);
-        }
-    } while (0);
+    if ((fread(header, 1, HEADER_RANGE-1, fp)) != (HEADER_RANGE-1)) {
+        fprintf((__acrt_iob_func(2)), "[pdfresurrect] -- Error -- Failed to find PDF header.\n"); 
+        exit(1);
+    }
     fseek(fp, start, SEEK_SET);
     return header;
 }
 
 
+/**
+ ** @brief  Decodes a PDF string object - can be literal string or hex string.
+ ** Keeps in-situ all BOMs, Uniciode or backslash escape sequenes.
+ ** 
+ ** @returns the decoded PDF string as a char string (includes a zero-length string).
+ ** Returns NULL on a syntax error (invalid string).
+ **/
 static char *decode_text_string(const char *str, size_t str_len)
 {
-    int   idx, is_hex, is_utf16be, ascii_idx;
+    int   idx, is_hex, is_utf16be, is_utf8, ascii_idx;
     char *ascii, hex_buf[5] = {0};
 
-    is_hex = is_utf16be = idx = ascii_idx = 0;
-
-    /* Regular encoding */
-    if (str[0] == '(')
+    is_hex = is_utf16be = is_utf8 = idx = ascii_idx = 0;
+    
+    if (str[0] == '(') /* Literal string: could be UTF-16BE or UTF-8 */
     {
         ascii = safe_calloc(str_len + 1);
         strncpy(ascii, str, str_len + 1);
         return ascii;
     }
-    else if (str[0] == '<')
+    else if (str[0] == '<') /* Hex string - case INSENSITIVE */
     {
         is_hex = 1;
         ++idx;
-    }
 
-    /* Text strings can be either PDFDocEncoding or UTF-16BE */
-    if (is_hex && (str_len > 5) &&
-        (str[idx] == 'F') && (str[idx+1] == 'E') &&
-        (str[idx+2] == 'F') && (str[idx+3] == 'F'))
-    {
-        is_utf16be = 1;
-        idx += 4;
+        /* Hex strings might have UTF-16BE or UTF-8 BOM but leave in place */
+        /* Decode as pairs of hex digits */
+        ascii = safe_calloc(1 + (str_len / 2));
+        for (; idx < str_len; ++idx)
+        {
+            hex_buf[0] = str[idx++];
+            hex_buf[1] = str[idx++];
+            hex_buf[2] = str[idx++];
+            hex_buf[3] = str[idx];
+            ascii[ascii_idx++] = (char) strtol(hex_buf, NULL, 16);
+        }
+        return ascii;
     }
-    else
-      return NULL;
-
-    /* Now decode as hex */
-    ascii = safe_calloc(str_len);
-    for ( ; idx<str_len; ++idx)
-    {
-        hex_buf[0] = str[idx++];
-        hex_buf[1] = str[idx++];
-        hex_buf[2] = str[idx++];
-        hex_buf[3] = str[idx];
-        ascii[ascii_idx++] = strtol(hex_buf, NULL, 16);
-    }
-
-    return ascii;
+    return NULL;
 }
 
 
-/* Return the offset to the beginning of the %%EOF string.
- * A negative value is returned when done scanning.
- */
-static int get_next_eof(FILE *fp)
+/**
+  ** @brief Return the file offset to the beginning of the next "%%EOF" string.
+  ** There is no check for EOL bytes before or after the "%%EOF"!
+  **
+  ** @param[in,out] fp   file handle to open PDF file.
+  **
+  ** @returns File offset or a -1 if end-of-file is reached.
+  **/
+static long get_next_eof(FILE *fp)
 {
     int match, c;
     const char buf[] = "%%EOF";
@@ -1293,13 +1301,17 @@ static int get_next_eof(FILE *fp)
     while ((c = fgetc(fp)) != EOF)
     {
         if (c == buf[match])
-          ++match;
+            ++match;
         else
-          match = 0;
+            match = 0;
 
         if (match == 5) /* strlen("%%EOF") */
-          return ftell(fp) - 5;
+        {
+            long offset = ftell(fp) - 5;
+            // printf("Found '%%%%EOF' at byte offset %d\n", offset);
+            return offset;
+        }
     }
 
-    return -1;
+    return -1; /* end-of-file reached */
 }

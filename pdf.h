@@ -26,8 +26,8 @@ typedef unsigned short pdf_flag_t;
 
 
 /* Generic key/value structure */
-#define KV_MAX_KEY_LENGTH   32
-#define KV_MAX_VALUE_LENGTH 128
+#define KV_MAX_KEY_LENGTH   255
+#define KV_MAX_VALUE_LENGTH 1024
 typedef struct _kv_t
 {
     char key[KV_MAX_KEY_LENGTH];
@@ -79,6 +79,7 @@ typedef struct _pdf_t
     char  *name;
     int   pdf_major_version;
     int   pdf_minor_version;
+    size_t  file_size;
 
     int     n_xrefs;
     xref_t *xrefs;
